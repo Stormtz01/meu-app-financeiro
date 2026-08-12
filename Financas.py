@@ -8,7 +8,7 @@ import plotly.express as px
 import openai
 
 # === 🔑 SEGREDOS DO APLICATIVO ===
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 DATABASE_URL = st.secrets["DATABASE_URL"]
 # =======================================
 
@@ -268,12 +268,12 @@ def tela_principal():
             st.error(f"Erro no dashboard: {e}")
 
     with aba_ia:
-        st.header("🤖 Seu Assistente Financeiro (ChatGPT)")
-        st.write("Converse com a IA sobre seus gastos. Ela já conhece o seu histórico!")
+        st.header("🤖 Seu Assistente Financeiro (Groq Gratuito)")
+        st.write("Converse com a IA gratuita sobre Seus gastos. Ela já conhece o seu histórico!")
         
-        if OPENAI_API_KEY != "":
+        if GROQ_API_KEY != "":
             if st.button("Analisar minhas finanças com IA", type="primary"):
-                with st.spinner("Conectando ao ChatGPT..."):
+                with st.spinner("Conectando à IA Gratuita da Groq..."):
                     try:
                         with engine.connect() as conn:
                             df_hist = pd.read_sql(text("SELECT * FROM historico WHERE usuario = :user"), conn, params={"user": usuario_atual})
@@ -284,13 +284,17 @@ def tela_principal():
                             df_saidas = df_hist[df_hist['tipo'] == 'Saída']
                             resumo = "Gastos por categoria:\n" + "\n".join([f"- {c}: R$ {v:.2f}" for c, v in df_saidas.groupby('categoria')['valor'].sum().abs().items()])
                             
-                            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                            # Configurando o cliente apontando para a Groq
+                            client = openai.OpenAI(
+                                api_key=GROQ_API_KEY,
+                                base_url="https://api.groq.com/openai/v1"
+                            )
                             
                             system_prompt = "Atue como um consultor financeiro especialista na regra 50/30/20. Responda obrigatoriamente em Português do Brasil (PT-BR)."
                             user_prompt = f"Aqui estão os dados financeiros do usuário: {resumo}. Analise o balanço e forneça 3 dicas práticas de onde melhorar."
                             
                             response = client.chat.completions.create(
-                                model="gpt-4o-mini",
+                                model="llama-3.3-70b-versatile",
                                 messages=[
                                     {"role": "system", "content": system_prompt},
                                     {"role": "user", "content": user_prompt}
@@ -298,13 +302,13 @@ def tela_principal():
                             )
                             
                             resposta_texto = response.choices[0].message.content
-                            st.success("✅ Análise gerada com sucesso pelo ChatGPT!")
+                            st.success("✅ Análise gerada com sucesso pela Groq (Gratuito)!")
                             st.write(resposta_texto)
                                 
                     except Exception as e:
-                        st.error(f"Erro ao comunicar com a OpenAI: {e}")
+                        st.error(f"Erro ao comunicar com a Groq: {e}")
         else:
-            st.warning("⚠️ Chave de API da OpenAI não configurada.")
+            st.warning("⚠️ Chave de API da Groq não configurada nos secrets.")
 
 # ==========================================
 # 3. O SISTEMA DE LOGIN E CADASTRO
@@ -379,7 +383,7 @@ if not st.session_state['autenticado']:
                 
                 if submit_senha:
                     if alt_usuario and alt_senha_atual and alt_nova_senha:
-                        with engine.begin() as conn:
+                        with engine.connect() as conn:
                             res = conn.execute(
                                 text("SELECT * FROM usuarios WHERE usuario = :u AND senha = :s"), 
                                 {"u": alt_usuario, "s": alt_senha_atual}
