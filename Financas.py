@@ -376,7 +376,7 @@ if not st.session_state['autenticado']:
                 
                 if submit_senha:
                     if alt_usuario and alt_senha_atual and alt_nova_senha:
-                        with engine.connect() as conn:
+                        with engine.begin() as conn:
                             res = conn.execute(
                                 text("SELECT * FROM usuarios WHERE usuario = :u AND senha = :s"), 
                                 {"u": alt_usuario, "s": alt_senha_atual}
