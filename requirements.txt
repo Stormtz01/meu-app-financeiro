@@ -4,3 +4,5 @@ pdfplumber
 plotly
 google-generativeai
 openpyxl
+SQLAlchemy
+psycopg2-binary
