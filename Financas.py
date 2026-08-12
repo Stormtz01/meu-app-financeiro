@@ -17,12 +17,10 @@ st.set_page_config(page_title="Controle Financeiro", layout="centered", page_ico
 # ==========================================
 # 1. FUNÇÕES BASE E BANCO DE DADOS EM NUVEM
 # ==========================================
-# Cria o "motor" de conexão com o Supabase
 engine = create_engine(DATABASE_URL)
 
 def inicializar_banco():
     with engine.begin() as conn:
-        # No PostgreSQL usamos SERIAL ao invés de AUTOINCREMENT
         conn.execute(text('''
             CREATE TABLE IF NOT EXISTS historico (
                 id SERIAL PRIMARY KEY,
@@ -47,7 +45,6 @@ def inicializar_banco():
         if res[0] == 0:
             conn.execute(text("INSERT INTO usuarios (usuario, senha) VALUES ('Christian', '1234')"))
 
-# Roda a inicialização sempre que o app liga
 inicializar_banco()
 
 def extrair_dados_pdf(arquivo):
@@ -283,7 +280,7 @@ def tela_principal():
                     genai.configure(api_key=CHAVE_API_GEMINI)
                     
                     if st.button("Analisar minhas finanças", type="primary"):
-                        with st.spinner("A IA está analisando seus dados, procurando o melhor modelo..."):
+                        with st.spinner("A IA está analisando seus dados..."):
                             
                             df_entradas = df_hist[df_hist['tipo'] == 'Entrada']
                             df_saidas = df_hist[df_hist['tipo'] == 'Saída']
@@ -309,26 +306,13 @@ def tela_principal():
                             Com base na regra 50/30/20, forneça 3 dicas práticas de onde o usuário pode melhorar.
                             """
                             
-                            modelo_funcionando = None
-                            resposta_ia = ""
-                            
-                            modelos_texto = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                            
-                            for nome_modelo in modelos_texto:
-                                try:
-                                    modelo = genai.GenerativeModel(nome_modelo)
-                                    resposta = modelo.generate_content(prompt)
-                                    resposta_ia = resposta.text
-                                    modelo_funcionando = nome_modelo
-                                    break 
-                                except Exception:
-                                    continue
-                            
-                            if modelo_funcionando:
-                                st.caption(f"✅ Análise gerada com sucesso usando o modelo: **{modelo_funcionando}**")
-                                st.write(resposta_ia)
-                            else:
-                                st.error("Nenhum modelo compatível foi encontrado. Verifique as restrições da sua conta no Google AI Studio.")
+                            try:
+                                modelo = genai.GenerativeModel('gemini-1.5-flash')
+                                resposta = modelo.generate_content(prompt)
+                                st.caption("✅ Análise gerada com sucesso usando o modelo **gemini-1.5-flash**")
+                                st.write(resposta.text)
+                            except Exception as err_ia:
+                                st.error(f"Erro ao comunicar com a IA: {err_ia}")
                 else:
                     st.info("Você precisa ter dados salvos no banco para a IA analisar.")
             else:
