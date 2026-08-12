@@ -405,83 +405,85 @@ if 'autenticado' not in st.session_state:
 if not st.session_state['autenticado']:
     st.markdown("<h1 style='text-align: center;'>🔒 Acesso ao Sistema</h1>", unsafe_allow_html=True)
     st.write("---")
-
+    
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         aba_login, aba_cadastro, aba_senha = st.tabs(["Entrar", "Criar Nova Conta", "Alterar Senha"])
-
+        
         # --- LÓGICA DE LOGIN ---
         with aba_login:
             st.write("Insira suas credenciais para acessar o painel.")
-            usuario_login = st.text_input("Usuário", key="log_user")
-            senha_login = st.text_input("Senha", type="password", key="log_pass")
-
-            if st.button("Entrar", type="primary", use_container_width=True):
-                if usuario_login and senha_login:
-                    conn = conectar_banco()
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT * FROM usuarios WHERE usuario = ? AND senha = ?",
-                                   (usuario_login, senha_login))
-                    usuario_encontrado = cursor.fetchone()
-                    conn.close()
-
-                    if usuario_encontrado:
-                        st.session_state['autenticado'] = True
-                        st.session_state['usuario'] = usuario_login
-                        st.rerun()
+            # O st.form cria uma "caixa" que envia tudo de uma vez, resolvendo o bug do autofill
+            with st.form("form_login"):
+                usuario_login = st.text_input("Usuário")
+                senha_login = st.text_input("Senha", type="password")
+                submit_login = st.form_submit_button("Entrar", use_container_width=True)
+                
+                if submit_login:
+                    if usuario_login and senha_login:
+                        conn = conectar_banco()
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT * FROM usuarios WHERE usuario = ? AND senha = ?", (usuario_login, senha_login))
+                        usuario_encontrado = cursor.fetchone()
+                        conn.close()
+                        
+                        if usuario_encontrado:
+                            st.session_state['autenticado'] = True
+                            st.session_state['usuario'] = usuario_login
+                            st.rerun()
+                        else:
+                            st.error("⚠️ Usuário ou senha incorretos.")
                     else:
-                        st.error("⚠️ Usuário ou senha incorretos.")
-                else:
-                    st.warning("Preencha todos os campos.")
-
+                        st.warning("Preencha todos os campos.")
+                    
         # --- LÓGICA DE CADASTRO ---
         with aba_cadastro:
             st.write("Cadastre um novo usuário para acessar o sistema.")
-            novo_usuario = st.text_input("Novo Usuário", key="cad_user")
-            nova_senha = st.text_input("Nova Senha", type="password", key="cad_pass")
-            confirma_senha = st.text_input("Confirme a Senha", type="password", key="cad_pass_conf")
-
-            if st.button("Cadastrar", use_container_width=True):
-                if novo_usuario and nova_senha and confirma_senha:
-                    if nova_senha == confirma_senha:
-                        conn = conectar_banco()
-                        try:
-                            conn.execute("INSERT INTO usuarios (usuario, senha) VALUES (?, ?)",
-                                         (novo_usuario, nova_senha))
-                            conn.commit()
-                            st.success(
-                                f"✅ Conta criada! O usuário '{novo_usuario}' já pode fazer login na aba 'Entrar'.")
-                        except sqlite3.IntegrityError:
-                            st.error(
-                                "⚠️ Este usuário já está cadastrado! Escolha outro nome ou vá para a aba 'Entrar'.")
-                        finally:
-                            conn.close()
+            with st.form("form_cadastro"):
+                novo_usuario = st.text_input("Novo Usuário")
+                nova_senha = st.text_input("Nova Senha", type="password")
+                confirma_senha = st.text_input("Confirme a Senha", type="password")
+                submit_cadastro = st.form_submit_button("Cadastrar", use_container_width=True)
+                
+                if submit_cadastro:
+                    if novo_usuario and nova_senha and confirma_senha:
+                        if nova_senha == confirma_senha:
+                            conn = conectar_banco()
+                            try:
+                                conn.execute("INSERT INTO usuarios (usuario, senha) VALUES (?, ?)", (novo_usuario, nova_senha))
+                                conn.commit()
+                                st.success(f"✅ Conta criada! O usuário '{novo_usuario}' já pode fazer login na aba 'Entrar'.")
+                            except sqlite3.IntegrityError:
+                                st.error("⚠️ Este usuário já está cadastrado! Escolha outro nome ou vá para a aba 'Entrar'.")
+                            finally:
+                                conn.close()
+                        else:
+                            st.error("⚠️ As senhas não coincidem.")
                     else:
-                        st.error("⚠️ As senhas não coincidem.")
-                else:
-                    st.warning("Preencha todos os campos.")
+                        st.warning("Preencha todos os campos.")
 
         # --- LÓGICA DE ALTERAR SENHA ---
         with aba_senha:
             st.write("Atualize a sua senha de acesso.")
-            alt_usuario = st.text_input("Usuário", key="alt_user")
-            alt_senha_atual = st.text_input("Senha Atual", type="password", key="alt_pass_atual")
-            alt_nova_senha = st.text_input("Nova Senha", type="password", key="alt_pass_nova")
-
-            if st.button("Atualizar Senha", use_container_width=True):
-                if alt_usuario and alt_senha_atual and alt_nova_senha:
-                    conn = conectar_banco()
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT * FROM usuarios WHERE usuario = ? AND senha = ?",
-                                   (alt_usuario, alt_senha_atual))
-                    if cursor.fetchone():
-                        conn.execute("UPDATE usuarios SET senha = ? WHERE usuario = ?", (alt_nova_senha, alt_usuario))
-                        conn.commit()
-                        st.success("✅ Senha alterada com sucesso! Você já pode fazer login.")
+            with st.form("form_senha"):
+                alt_usuario = st.text_input("Usuário")
+                alt_senha_atual = st.text_input("Senha Atual", type="password")
+                alt_nova_senha = st.text_input("Nova Senha", type="password")
+                submit_senha = st.form_submit_button("Atualizar Senha", use_container_width=True)
+                
+                if submit_senha:
+                    if alt_usuario and alt_senha_atual and alt_nova_senha:
+                        conn = conectar_banco()
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT * FROM usuarios WHERE usuario = ? AND senha = ?", (alt_usuario, alt_senha_atual))
+                        if cursor.fetchone():
+                            conn.execute("UPDATE usuarios SET senha = ? WHERE usuario = ?", (alt_nova_senha, alt_usuario))
+                            conn.commit()
+                            st.success("✅ Senha alterada com sucesso! Você já pode fazer login.")
+                        else:
+                            st.error("⚠️ Usuário ou senha atual incorretos.")
+                        conn.close()
                     else:
-                        st.error("⚠️ Usuário ou senha atual incorretos.")
-                    conn.close()
-                else:
-                    st.warning("Preencha todos os campos.")
+                        st.warning("Preencha todos os campos.")
 else:
     tela_principal()
