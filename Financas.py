@@ -5,11 +5,10 @@ import re
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 import plotly.express as px
-import urllib.request
-import json
+import openai
 
 # === 🔑 SEGREDOS DO APLICATIVO ===
-CHAVE_API_GEMINI = st.secrets["CHAVE_GEMINI"]
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 DATABASE_URL = st.secrets["DATABASE_URL"]
 # =======================================
 
@@ -74,33 +73,6 @@ def classificar_despesa(descricao):
 def formata_br(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def chamar_gemini_oauth(token, prompt):
-    """Função robusta que envia o token AQ. como Bearer Token diretamente para a API do Google"""
-    modelos = ['gemini-1.5-flash', 'gemini-1.5-pro']
-    
-    for modelo in modelos:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
-        headers = {
-            "Authorization": f"Bearer {token.strip()}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
-        
-        try:
-            req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
-            with urllib.request.urlopen(req) as response:
-                resposta_json = json.loads(response.read().decode('utf-8'))
-                texto_gerado = resposta_json['candidates'][0]['content']['parts'][0]['text']
-                return texto_gerado, modelo
-        except Exception:
-            continue # Tenta o próximo modelo se o atual falhar
-            
-    raise Exception("Nenhum modelo conseguiu processar a requisição com o token fornecido.")
-
 
 # ==========================================
 # 2. O APLICATIVO PRINCIPAL (Protegido e Isolado)
@@ -123,7 +95,7 @@ def tela_principal():
 
     with aba_importacao:
         st.write("Faça o upload do extrato para classificar e salvar no sistema.")
-        arquivo_upload = st.file_uploader("Selecione o arquivo du extrato", type=["pdf", "csv", "xlsx"])
+        arquivo_upload = st.file_uploader("Selecione o arquivo do extrato", type=["pdf", "csv", "xlsx"])
 
         if arquivo_upload is not None:
             try:
@@ -296,32 +268,40 @@ def tela_principal():
             st.error(f"Erro no dashboard: {e}")
 
     with aba_ia:
-        st.header("🤖 Seu Assistente Financeiro")
+        st.header("🤖 Seu Assistente Financeiro (ChatGPT)")
         st.write("Converse com a IA sobre seus gastos. Ela já conhece o seu histórico!")
         
-        if CHAVE_API_GEMINI != "" and CHAVE_API_GEMINI != "COLE_A_SUA_CHAVE_AQUI_DENTRO_DAS_ASPAS":
-            if st.button("Analisar minhas finanças", type="primary"):
-                with st.spinner("Conectando à IA..."):
+        if OPENAI_API_KEY != "":
+            if st.button("Analisar minhas finanças com IA", type="primary"):
+                with st.spinner("Conectando ao ChatGPT..."):
                     try:
                         with engine.connect() as conn:
                             df_hist = pd.read_sql(text("SELECT * FROM historico WHERE usuario = :user"), conn, params={"user": usuario_atual})
                         
                         if df_hist.empty:
-                            st.info("You need to have saved data in the database for the AI to analyze.")
+                            st.info("Você precisa ter dados salvos no banco para a IA analisar.")
                         else:
                             df_saidas = df_hist[df_hist['tipo'] == 'Saída']
                             resumo = "Gastos por categoria:\n" + "\n".join([f"- {c}: R$ {v:.2f}" for c, v in df_saidas.groupby('categoria')['valor'].sum().abs().items()])
-                            prompt = f"Atue como consultor financeiro especialista na regra 50/30/20. Responda obrigatoriamente em Português do Brasil (PT-BR). Dados financeiros do usuário: {resumo}. Analise e forneça 3 dicas práticas."
-
-                            # Chamada direta via HTTP OAuth suportando o token AQ.
-                            texto_resposta, modelo_usado = chamar_gemini_oauth(CHAVE_API_GEMINI, prompt)
-                            st.success(f"✅ Análise gerada com sucesso usando o modelo: **{modelo_usado}**")
-                            st.write(texto_resposta)
+                            
+                            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                            
+                            response = client.chat.completions.create(
+                                model="gpt-4o-mini",
+                                messages=[
+                                    {"role": "system", "content": "Atue como um consultor financeiro especialista na regra 50/30/20. Responda obrigatoriamente em Português do Brasil (PT-BR)."},
+                                    {"role": "user", "content": f"Aqui estão os dados financeiros do usuário: {resumo}. Analise o balanço e forneça 3 dicas práticas de onde melhorar."}
+                                ]
+                            ]
+                            
+                            resposta_texto = response.choices[0].message.content
+                            st.success("✅ Análise gerada com sucesso pelo ChatGPT!")
+                            st.write(resposta_texto)
                                 
                     except Exception as e:
-                        st.error(f"Erro ao comunicar com a IA: {e}")
+                        st.error(f"Erro ao comunicar com a OpenAI: {e}")
         else:
-            st.warning("⚠️ Chave de API do Gemini não configurada.")
+            st.warning("⚠️ Chave de API da OpenAI não configurada.")
 
 # ==========================================
 # 3. O SISTEMA DE LOGIN E CADASTRO
@@ -396,7 +376,7 @@ if not st.session_state['autenticado']:
                 
                 if submit_senha:
                     if alt_usuario and alt_senha_atual and alt_nova_senha:
-                        with engine.begin() as conn:
+                        with engine.connect() as conn:
                             res = conn.execute(
                                 text("SELECT * FROM usuarios WHERE usuario = :u AND senha = :s"), 
                                 {"u": alt_usuario, "s": alt_senha_atual}
