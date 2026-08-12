@@ -2,59 +2,53 @@ import streamlit as st
 import pandas as pd
 import pdfplumber
 import re
-import sqlite3
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 import plotly.express as px
 import google.generativeai as genai
 
-# === 🔑 SUA CHAVE SECRETA DA IA AQUI ===
-CHAVE_API_GEMINI = "AQ.Ab8RN6L4f9vSR21Vt8S7k6g9jDLbXK6koPSgBw7CKfJwRreKkQ"
+# === 🔑 SEGREDOS DO APLICATIVO ===
+CHAVE_API_GEMINI = st.secrets["CHAVE_GEMINI"]
+DATABASE_URL = st.secrets["DATABASE_URL"]
 # =======================================
 
 st.set_page_config(page_title="Controle Financeiro", layout="centered", page_icon="💸")
 
-
 # ==========================================
-# 1. FUNÇÕES BASE E BANCO DE DADOS
+# 1. FUNÇÕES BASE E BANCO DE DADOS EM NUVEM
 # ==========================================
-def conectar_banco():
-    conn = sqlite3.connect('meu_controle.db')
+# Cria o "motor" de conexão com o Supabase
+engine = create_engine(DATABASE_URL)
 
-    # Cria a tabela de histórico já com a coluna 'usuario'
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS historico (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            data TEXT,
-            mes_ano TEXT,
-            descricao TEXT,
-            categoria TEXT,
-            valor REAL,
-            tipo TEXT,
-            usuario TEXT
-        )
-    ''')
+def inicializar_banco():
+    with engine.begin() as conn:
+        # No PostgreSQL usamos SERIAL ao invés de AUTOINCREMENT
+        conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS historico (
+                id SERIAL PRIMARY KEY,
+                data TEXT,
+                mes_ano TEXT,
+                descricao TEXT,
+                categoria TEXT,
+                valor REAL,
+                tipo TEXT,
+                usuario TEXT
+            )
+        '''))
+        
+        conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS usuarios (
+                usuario TEXT PRIMARY KEY,
+                senha TEXT
+            )
+        '''))
+        
+        res = conn.execute(text("SELECT COUNT(*) FROM usuarios")).fetchone()
+        if res[0] == 0:
+            conn.execute(text("INSERT INTO usuarios (usuario, senha) VALUES ('Christian', '1234')"))
 
-    # ATUALIZAÇÃO AUTOMÁTICA (Migração para não perder seus testes anteriores)
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(historico)")
-    colunas = [col[1] for col in cursor.fetchall()]
-    if 'usuario' not in colunas:
-        conn.execute("ALTER TABLE historico ADD COLUMN usuario TEXT DEFAULT 'Christian'")
-        conn.commit()
-
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS usuarios (
-            usuario TEXT PRIMARY KEY,
-            senha TEXT
-        )
-    ''')
-
-    cursor.execute("SELECT COUNT(*) FROM usuarios")
-    if cursor.fetchone()[0] == 0:
-        conn.execute("INSERT INTO usuarios (usuario, senha) VALUES ('Christian', '1234')")
-        conn.commit()
-
-    return conn
-
+# Roda a inicialização sempre que o app liga
+inicializar_banco()
 
 def extrair_dados_pdf(arquivo):
     linhas_extrato = []
@@ -71,21 +65,13 @@ def extrair_dados_pdf(arquivo):
                             linhas_extrato.append({'data': data, 'origem / destino': lancamento, 'valor': valor})
     return pd.DataFrame(linhas_extrato)
 
-
 def classificar_despesa(descricao):
     desc_min = str(descricao).lower()
-    if any(p in desc_min for p in ['remuneracao/salario', 'somos educacao', 'pix transf christi']):
-        return 'Ignorar'
-    elif any(p in desc_min for p in ['claro', 'moura', 'oficina', 'mecânica', 'energia', 'água', 'iptu', 'ipva']):
-        return 'Contas (50%)'
-    elif any(p in desc_min for p in ['investimento', 'cdb', 'tesouro', 'cofrinho', 'guardado']):
-        return 'Reserva (30%)'
-    elif any(p in desc_min for p in
-             ['epic game', 'steam', 'playstation', 'nintendo', 'outback', 'habib', 'boigalê', 'di paolo', 'ifood',
-              'ingresso']):
-        return 'Lazer (20%)'
+    if any(p in desc_min for p in ['remuneracao/salario', 'somos educacao', 'pix transf christi']): return 'Ignorar'
+    elif any(p in desc_min for p in ['claro', 'moura', 'oficina', 'mecânica', 'energia', 'água', 'iptu', 'ipva']): return 'Contas (50%)'
+    elif any(p in desc_min for p in ['investimento', 'cdb', 'tesouro', 'cofrinho', 'guardado']): return 'Reserva (30%)'
+    elif any(p in desc_min for p in ['epic game', 'steam', 'playstation', 'nintendo', 'outback', 'habib', 'boigalê', 'di paolo', 'ifood', 'ingresso']): return 'Lazer (20%)'
     return 'Outros'
-
 
 def formata_br(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -95,41 +81,33 @@ def formata_br(valor):
 # 2. O APLICATIVO PRINCIPAL (Protegido e Isolado)
 # ==========================================
 def tela_principal():
-    # Guarda o nome de quem está logado numa variável curta para facilitar
     usuario_atual = st.session_state['usuario']
-
+    
     st.sidebar.title("Configurações")
     st.sidebar.write(f"Bem-vindo, **{usuario_atual}**!")
-
+    
     if st.sidebar.button("Sair (Logout)"):
         st.session_state['autenticado'] = False
         st.rerun()
 
     st.title("💸 Meu Controle Financeiro")
-
+    
     aba_importacao, aba_historico, aba_dashboard, aba_ia = st.tabs([
         "📥 Importar", "🗄️ Banco de Dados", "📈 Dashboard", "🤖 Conselheiro IA"
     ])
 
-    # === ABA 1: IMPORTAÇÃO E CLASSIFICAÇÃO ===
     with aba_importacao:
         st.write("Faça o upload do extrato para classificar e salvar no sistema.")
         arquivo_upload = st.file_uploader("Selecione o arquivo do extrato", type=["pdf", "csv", "xlsx"])
 
         if arquivo_upload is not None:
             try:
-                if arquivo_upload.name.endswith('.pdf'):
-                    df = extrair_dados_pdf(arquivo_upload)
-                elif arquivo_upload.name.endswith('.csv'):
-                    df = pd.read_csv(arquivo_upload, sep=',')
-                else:
-                    df = pd.read_excel(arquivo_upload)
-
+                if arquivo_upload.name.endswith('.pdf'): df = extrair_dados_pdf(arquivo_upload)
+                elif arquivo_upload.name.endswith('.csv'): df = pd.read_csv(arquivo_upload, sep=',') 
+                else: df = pd.read_excel(arquivo_upload)
+                    
                 if 'valor' in df.columns:
-                    df['valor_calculo'] = df['valor'].astype(str).str.replace('R$', '', regex=False).str.replace(' ',
-                                                                                                                 '',
-                                                                                                                 regex=False).str.replace(
-                        '.', '', regex=False).str.replace(',', '.', regex=False)
+                    df['valor_calculo'] = df['valor'].astype(str).str.replace('R$', '', regex=False).str.replace(' ', '', regex=False).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
                     df['valor_calculo'] = pd.to_numeric(df['valor_calculo'], errors='coerce')
 
                 if 'data' in df.columns:
@@ -143,27 +121,24 @@ def tela_principal():
 
                 if 'origem / destino' in df_mes.columns and 'valor_calculo' in df_mes.columns:
                     df_mes['Categoria'] = df_mes['origem / destino'].apply(classificar_despesa)
-
-                    filtro_salario = df_mes['origem / destino'].str.lower().str.contains(
-                        'remuneracao/salario|salário|salario|pagamento', na=False)
+                    
+                    filtro_salario = df_mes['origem / destino'].str.lower().str.contains('remuneracao/salario|salário|salario|pagamento', na=False)
                     salario_identificado = df_mes.loc[filtro_salario, 'valor_calculo'].sum()
-
+                    
                     if salario_identificado > 0:
                         st.header(f"🎯 Planejamento: {mes_selecionado}")
                         st.write(f"Renda identificada: **{formata_br(salario_identificado)}**")
-                        painel_metricas = st.empty()
-
+                        painel_metricas = st.empty() 
+                        
                         st.divider()
                         st.subheader("📝 Ajuste as categorias antes de salvar")
                         df_tela = df_mes[['data', 'origem / destino', 'Categoria', 'valor', 'valor_calculo', 'mes_ano']]
 
                         df_editado = st.data_editor(
                             df_tela,
-                            column_config={"Categoria": st.column_config.SelectboxColumn(
-                                options=['Contas (50%)', 'Reserva (30%)', 'Lazer (20%)', 'Ignorar', 'Outros'],
-                                required=True),
+                            column_config={"Categoria": st.column_config.SelectboxColumn(options=['Contas (50%)', 'Reserva (30%)', 'Lazer (20%)', 'Ignorar', 'Outros'], required=True),
                                            "valor_calculo": None, "mes_ano": None},
-                            disabled=["data", "origem / destino", "valor"],
+                            disabled=["data", "origem / destino", "valor"], 
                             hide_index=True, use_container_width=True
                         )
 
@@ -175,111 +150,85 @@ def tela_principal():
                         with painel_metricas.container():
                             st.subheader("Desempenho x Meta")
                             c1, c2, c3 = st.columns(3)
-                            c1.metric("Contas (50%)", formata_br(real_essencial),
-                                      f"{(salario_identificado * 0.50) - real_essencial:,.2f} livre")
-                            c2.metric("Reserva (30%)", formata_br(real_reserva),
-                                      f"{(salario_identificado * 0.30) - real_reserva:,.2f} livre")
-                            c3.metric("Lazer (20%)", formata_br(real_lazer),
-                                      f"{(salario_identificado * 0.20) - real_lazer:,.2f} livre")
+                            c1.metric("Contas (50%)", formata_br(real_essencial), f"{(salario_identificado * 0.50) - real_essencial:,.2f} livre")
+                            c2.metric("Reserva (30%)", formata_br(real_reserva), f"{(salario_identificado * 0.30) - real_reserva:,.2f} livre")
+                            c3.metric("Lazer (20%)", formata_br(real_lazer), f"{(salario_identificado * 0.20) - real_lazer:,.2f} livre")
 
                         st.divider()
                         st.subheader("💾 Salvar no Sistema")
-
+                        
                         if st.button("Gravar no Banco de Dados", type="primary"):
                             df_para_banco = df_editado[df_editado['Categoria'] != 'Ignorar'].copy()
-                            df_para_banco['tipo'] = df_para_banco['valor_calculo'].apply(
-                                lambda x: 'Entrada' if x > 0 else 'Saída')
-
-                            # Carimba os dados com o nome do usuário logado
+                            df_para_banco['tipo'] = df_para_banco['valor_calculo'].apply(lambda x: 'Entrada' if x > 0 else 'Saída')
                             df_para_banco['usuario'] = usuario_atual
-
-                            dados_sql = df_para_banco[
-                                ['data', 'mes_ano', 'origem / destino', 'Categoria', 'valor_calculo', 'tipo',
-                                 'usuario']]
-                            dados_sql.columns = ['data', 'mes_ano', 'descricao', 'categoria', 'valor', 'tipo',
-                                                 'usuario']
-
-                            conn = conectar_banco()
-                            # Apaga as duplicatas apenas DESTE usuário neste mês
-                            conn.execute("DELETE FROM historico WHERE mes_ano = ? AND usuario = ?",
-                                         (mes_selecionado, usuario_atual))
-                            dados_sql.to_sql('historico', conn, if_exists='append', index=False)
-                            conn.commit()
-                            conn.close()
-
-                            st.success(
-                                f"Sucesso! Lançamentos de {mes_selecionado} foram gravados na sua conta. Verifique a aba 'Meu Banco de Dados'.")
+                            
+                            dados_sql = df_para_banco[['data', 'mes_ano', 'origem / destino', 'Categoria', 'valor_calculo', 'tipo', 'usuario']]
+                            dados_sql.columns = ['data', 'mes_ano', 'descricao', 'categoria', 'valor', 'tipo', 'usuario']
+                            
+                            with engine.begin() as conn:
+                                conn.execute(text("DELETE FROM historico WHERE mes_ano = :mes AND usuario = :user"), 
+                                             {"mes": mes_selecionado, "user": usuario_atual})
+                            
+                            dados_sql.to_sql('historico', engine, if_exists='append', index=False)
+                            st.success(f"Sucesso! Lançamentos de {mes_selecionado} foram gravados na nuvem. Verifique a aba 'Meu Banco de Dados'.")
                     else:
                         st.warning("Salário não encontrado neste mês.")
             except Exception as e:
                 st.error(f"Erro: {e}")
 
-    # === ABA 2: VISUALIZAÇÃO E EDIÇÃO DO BANCO ===
     with aba_historico:
         st.header("🗄️ Histórico Completo e Edição")
-        st.write(
-            "Dê dois cliques na célula para editar, ou selecione uma linha inteira e aperte `Delete` para apagá-la.")
-
+        st.write("Dê dois cliques na célula para editar, ou selecione uma linha inteira e aperte `Delete` para apagá-la.")
+        
         try:
-            conn = conectar_banco()
-            # Puxa apenas os dados do usuário logado
-            df_historico = pd.read_sql("SELECT * FROM historico WHERE usuario = ? ORDER BY id DESC", conn,
-                                       params=(usuario_atual,))
-            conn.close()
-
+            with engine.connect() as conn:
+                df_historico = pd.read_sql(text("SELECT * FROM historico WHERE usuario = :user ORDER BY id DESC"), conn, params={"user": usuario_atual})
+            
             if not df_historico.empty:
                 df_editado_db = st.data_editor(
-                    df_historico,
-                    num_rows="dynamic",
-                    hide_index=True,
+                    df_historico, 
+                    num_rows="dynamic", 
+                    hide_index=True, 
                     use_container_width=True,
                     column_config={
                         "id": st.column_config.NumberColumn(disabled=True),
-                        "categoria": st.column_config.SelectboxColumn(
-                            options=['Contas (50%)', 'Reserva (30%)', 'Lazer (20%)', 'Outros']),
-                        "usuario": None  # Esconde a coluna do usuário para não poder ser editada na tela
+                        "categoria": st.column_config.SelectboxColumn(options=['Contas (50%)', 'Reserva (30%)', 'Lazer (20%)', 'Outros']),
+                        "usuario": None 
                     }
                 )
-
+                
                 if st.button("Salvar Alterações no Banco"):
-                    conn = conectar_banco()
-                    # Apaga apenas os dados desse usuário para substituir pelos editados
-                    conn.execute("DELETE FROM historico WHERE usuario = ?", (usuario_atual,))
-                    df_editado_db.to_sql('historico', conn, if_exists='append', index=False)
-                    conn.commit()
-                    conn.close()
+                    with engine.begin() as conn:
+                        conn.execute(text("DELETE FROM historico WHERE usuario = :user"), {"user": usuario_atual})
+                    df_editado_db.to_sql('historico', engine, if_exists='append', index=False)
                     st.success("Alterações gravadas permanentemente! Os gráficos já estão atualizados.")
 
                 st.divider()
                 st.subheader("Resumo por Categoria (Todo o período)")
-                resumo = df_historico[df_historico['tipo'] == 'Saída'].groupby('categoria')[
-                    'valor'].sum().abs().reset_index()
+                resumo = df_historico[df_historico['tipo'] == 'Saída'].groupby('categoria')['valor'].sum().abs().reset_index()
                 resumo['valor'] = resumo['valor'].apply(lambda x: formata_br(x))
                 st.dataframe(resumo, hide_index=True)
             else:
-                st.info("O seu banco de dados pessoal ainda está vazio.")
-
+                st.info("O seu banco de dados na nuvem ainda está vazio.")
+                
         except Exception as e:
-            st.error(f"Erro no banco de dados: {e}")
+             st.error(f"Erro no banco de dados: {e}")
 
-    # === ABA 3: DASHBOARD E PROVISÕES ===
     with aba_dashboard:
         st.header("📈 Projeções e Gráficos")
-
+        
         try:
-            conn = conectar_banco()
-            # Puxa apenas os dados do usuário logado
-            df_hist = pd.read_sql("SELECT * FROM historico WHERE usuario = ?", conn, params=(usuario_atual,))
-            conn.close()
-
+            with engine.connect() as conn:
+                df_hist = pd.read_sql(text("SELECT * FROM historico WHERE usuario = :user"), conn, params={"user": usuario_atual})
+            
             if not df_hist.empty:
                 df_gastos = df_hist[df_hist['tipo'] == 'Saída'].copy()
-                df_gastos['valor'] = df_gastos['valor'].abs()
-
+                df_gastos['valor'] = df_gastos['valor'].abs() 
+                
                 st.subheader("Comparação de Gastos Mês a Mês")
                 df_agrupado = df_gastos.groupby(['mes_ano', 'categoria'])['valor'].sum().reset_index()
-
-                fig = px.bar(df_agrupado, x='mes_ano', y='valor', color='categoria',
+                
+                fig = px.bar(df_agrupado, x='mes_ano', y='valor', color='categoria', 
                              barmode='group', text_auto='.2f',
                              labels={'mes_ano': 'Mês / Ano', 'valor': 'Gasto (R$)', 'categoria': 'Categoria'},
                              color_discrete_map={
@@ -293,108 +242,100 @@ def tela_principal():
 
                 st.divider()
                 st.subheader("🔮 Provisionamento de Despesas Fixas")
-                st.write(
-                    "Abaixo está a projeção das suas **Contas (50%)**, calculada sempre com base no **último valor que você pagou**.")
-
+                st.write("Abaixo está a projeção das suas **Contas (50%)**, calculada sempre com base no **último valor que você pagou**.")
+                
                 df_contas = df_gastos[df_gastos['categoria'] == 'Contas (50%)'].copy()
-
+                
                 if not df_contas.empty:
                     df_contas = df_contas.sort_values(by='id', ascending=False)
                     df_ultimas_contas = df_contas.drop_duplicates(subset=['descricao'], keep='first')
-
+                    
                     df_exibicao_contas = df_ultimas_contas[['descricao', 'valor']].copy()
                     df_exibicao_contas.columns = ['Conta Registrada', 'Último Valor Pago (Projeção)']
-
+                    
                     st.dataframe(
-                        df_exibicao_contas.style.format({'Último Valor Pago (Projeção)': 'R$ {:.2f}'}),
-                        hide_index=True,
+                        df_exibicao_contas.style.format({'Último Valor Pago (Projeção)': 'R$ {:.2f}'}), 
+                        hide_index=True, 
                         use_container_width=True
                     )
-
+                    
                     total_projetado = df_exibicao_contas['Último Valor Pago (Projeção)'].sum()
                     st.metric(label="Valor Total Provisionado para Contas", value=formata_br(total_projetado))
                 else:
                     st.info("Ainda não há contas fixas registradas para gerar o provisionamento.")
 
             else:
-                st.info("O seu banco de dados pessoal está vazio.")
-
+                st.info("O seu banco de dados na nuvem está vazio.")
+                
         except Exception as e:
             st.error(f"Erro no dashboard: {e}")
 
-    # === ABA 4: O CONSELHEIRO IA ===
     with aba_ia:
         st.header("🤖 Seu Assistente Financeiro")
         st.write("Converse com a IA sobre seus gastos. Ela já conhece o seu histórico!")
-
+        
         try:
-            conn = conectar_banco()
-            # Puxa apenas os dados do usuário logado
-            df_hist = pd.read_sql("SELECT * FROM historico WHERE usuario = ?", conn, params=(usuario_atual,))
-            conn.close()
-
+            with engine.connect() as conn:
+                df_hist = pd.read_sql(text("SELECT * FROM historico WHERE usuario = :user"), conn, params={"user": usuario_atual})
+            
             if CHAVE_API_GEMINI != "" and CHAVE_API_GEMINI != "COLE_A_SUA_CHAVE_AQUI_DENTRO_DAS_ASPAS":
                 if not df_hist.empty:
                     genai.configure(api_key=CHAVE_API_GEMINI)
-
+                    
                     if st.button("Analisar minhas finanças", type="primary"):
                         with st.spinner("A IA está analisando seus dados, procurando o melhor modelo..."):
-
+                            
                             df_entradas = df_hist[df_hist['tipo'] == 'Entrada']
                             df_saidas = df_hist[df_hist['tipo'] == 'Saída']
-
+                            
                             renda_total = df_entradas['valor'].sum()
-
+                            
                             resumo_texto = f"Renda Total Registrada: R$ {renda_total:.2f}\n\nGastos por Categoria:\n"
-
+                            
                             gastos_por_categoria = df_saidas.groupby('categoria')['valor'].sum().abs()
                             for cat, val in gastos_por_categoria.items():
                                 resumo_texto += f"- {cat}: R$ {val:.2f}\n"
-
+                            
                             prompt = f"""
                             Atue como um consultor financeiro especialista na regra 50/30/20.
-
+                            
                             REGRA OBRIGATÓRIA: Responda SEMPRE e EXCLUSIVAMENTE em Português do Brasil (PT-BR). 
                             Não inclua pensamentos, etapas ou cabeçalhos em inglês na sua resposta.
-
+                            
                             Aqui estão os dados financeiros do usuário (acumulado do período):
                             {resumo_texto}
-
+                            
                             Analise o balanço entre a Renda Total e os Gastos. 
                             Com base na regra 50/30/20, forneça 3 dicas práticas de onde o usuário pode melhorar.
                             """
-
+                            
                             modelo_funcionando = None
                             resposta_ia = ""
-
-                            modelos_texto = [m.name for m in genai.list_models() if
-                                             'generateContent' in m.supported_generation_methods]
-
+                            
+                            modelos_texto = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                            
                             for nome_modelo in modelos_texto:
                                 try:
                                     modelo = genai.GenerativeModel(nome_modelo)
                                     resposta = modelo.generate_content(prompt)
                                     resposta_ia = resposta.text
                                     modelo_funcionando = nome_modelo
-                                    break
+                                    break 
                                 except Exception:
                                     continue
-
+                            
                             if modelo_funcionando:
                                 st.caption(f"✅ Análise gerada com sucesso usando o modelo: **{modelo_funcionando}**")
                                 st.write(resposta_ia)
                             else:
-                                st.error(
-                                    "Nenhum modelo compatível foi encontrado. Verifique as restrições da sua conta no Google AI Studio.")
+                                st.error("Nenhum modelo compatível foi encontrado. Verifique as restrições da sua conta no Google AI Studio.")
                 else:
                     st.info("Você precisa ter dados salvos no banco para a IA analisar.")
             else:
-                st.warning(
-                    "⚠️ Você precisa colar a sua Chave de API na linha 10 do código fonte para liberar esta aba!")
-
+                st.warning("⚠️ Chave de API do Gemini não configurada.")
+                 
         except Exception as e:
             st.error(f"Erro na IA: {e}")
-
 
 # ==========================================
 # 3. O SISTEMA DE LOGIN E CADASTRO
@@ -410,10 +351,8 @@ if not st.session_state['autenticado']:
     with col2:
         aba_login, aba_cadastro, aba_senha = st.tabs(["Entrar", "Criar Nova Conta", "Alterar Senha"])
         
-        # --- LÓGICA DE LOGIN ---
         with aba_login:
             st.write("Insira suas credenciais para acessar o painel.")
-            # O st.form cria uma "caixa" que envia tudo de uma vez, resolvendo o bug do autofill
             with st.form("form_login"):
                 usuario_login = st.text_input("Usuário")
                 senha_login = st.text_input("Senha", type="password")
@@ -421,11 +360,11 @@ if not st.session_state['autenticado']:
                 
                 if submit_login:
                     if usuario_login and senha_login:
-                        conn = conectar_banco()
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT * FROM usuarios WHERE usuario = ? AND senha = ?", (usuario_login, senha_login))
-                        usuario_encontrado = cursor.fetchone()
-                        conn.close()
+                        with engine.connect() as conn:
+                            usuario_encontrado = conn.execute(
+                                text("SELECT * FROM usuarios WHERE usuario = :u AND senha = :s"), 
+                                {"u": usuario_login, "s": senha_login}
+                            ).fetchone()
                         
                         if usuario_encontrado:
                             st.session_state['autenticado'] = True
@@ -436,7 +375,6 @@ if not st.session_state['autenticado']:
                     else:
                         st.warning("Preencha todos os campos.")
                     
-        # --- LÓGICA DE CADASTRO ---
         with aba_cadastro:
             st.write("Cadastre um novo usuário para acessar o sistema.")
             with st.form("form_cadastro"):
@@ -448,21 +386,20 @@ if not st.session_state['autenticado']:
                 if submit_cadastro:
                     if novo_usuario and nova_senha and confirma_senha:
                         if nova_senha == confirma_senha:
-                            conn = conectar_banco()
                             try:
-                                conn.execute("INSERT INTO usuarios (usuario, senha) VALUES (?, ?)", (novo_usuario, nova_senha))
-                                conn.commit()
+                                with engine.begin() as conn:
+                                    conn.execute(
+                                        text("INSERT INTO usuarios (usuario, senha) VALUES (:u, :s)"), 
+                                        {"u": novo_usuario, "s": nova_senha}
+                                    )
                                 st.success(f"✅ Conta criada! O usuário '{novo_usuario}' já pode fazer login na aba 'Entrar'.")
-                            except sqlite3.IntegrityError:
+                            except IntegrityError:
                                 st.error("⚠️ Este usuário já está cadastrado! Escolha outro nome ou vá para a aba 'Entrar'.")
-                            finally:
-                                conn.close()
                         else:
                             st.error("⚠️ As senhas não coincidem.")
                     else:
                         st.warning("Preencha todos os campos.")
 
-        # --- LÓGICA DE ALTERAR SENHA ---
         with aba_senha:
             st.write("Atualize a sua senha de acesso.")
             with st.form("form_senha"):
@@ -473,16 +410,20 @@ if not st.session_state['autenticado']:
                 
                 if submit_senha:
                     if alt_usuario and alt_senha_atual and alt_nova_senha:
-                        conn = conectar_banco()
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT * FROM usuarios WHERE usuario = ? AND senha = ?", (alt_usuario, alt_senha_atual))
-                        if cursor.fetchone():
-                            conn.execute("UPDATE usuarios SET senha = ? WHERE usuario = ?", (alt_nova_senha, alt_usuario))
-                            conn.commit()
-                            st.success("✅ Senha alterada com sucesso! Você já pode fazer login.")
-                        else:
-                            st.error("⚠️ Usuário ou senha atual incorretos.")
-                        conn.close()
+                        with engine.begin() as conn:
+                            res = conn.execute(
+                                text("SELECT * FROM usuarios WHERE usuario = :u AND senha = :s"), 
+                                {"u": alt_usuario, "s": alt_senha_atual}
+                            ).fetchone()
+                            
+                            if res:
+                                conn.execute(
+                                    text("UPDATE usuarios SET senha = :ns WHERE usuario = :u"), 
+                                    {"ns": alt_nova_senha, "u": alt_usuario}
+                                )
+                                st.success("✅ Senha alterada com sucesso! Você já pode fazer login.")
+                            else:
+                                st.error("⚠️ Usuário ou senha atual incorretos.")
                     else:
                         st.warning("Preencha todos os campos.")
 else:
