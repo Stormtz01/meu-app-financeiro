@@ -268,12 +268,12 @@ def tela_principal():
             st.error(f"Erro no dashboard: {e}")
 
     with aba_ia:
-        st.header("🤖 Seu Assistente Financeiro (Groq Gratuito)")
-        st.write("Converse com a IA gratuita sobre Seus gastos. Ela já conhece o seu histórico!")
+        st.header("🤖 Seu Assistente Financeiro")
+        st.write("Converse com a IA sobre Seus gastos. Ela já conhece o seu histórico!")
         
         if GROQ_API_KEY != "":
             if st.button("Analisar minhas finanças com IA", type="primary"):
-                with st.spinner("Conectando à IA Gratuita da Groq..."):
+                with st.spinner("Conectando à IA..."):
                     try:
                         with engine.connect() as conn:
                             df_hist = pd.read_sql(text("SELECT * FROM historico WHERE usuario = :user"), conn, params={"user": usuario_atual})
