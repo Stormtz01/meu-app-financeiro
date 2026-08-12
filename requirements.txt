@@ -1,8 +1,7 @@
 streamlit
 pandas
 pdfplumber
-plotly
-google-generativeai
-openpyxl
-SQLAlchemy
+sqlalchemy
 psycopg2-binary
+plotly
+openai
