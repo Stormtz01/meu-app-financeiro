@@ -286,13 +286,16 @@ def tela_principal():
                             
                             client = openai.OpenAI(api_key=OPENAI_API_KEY)
                             
+                            system_prompt = "Atue como um consultor financeiro especialista na regra 50/30/20. Responda obrigatoriamente em Português do Brasil (PT-BR)."
+                            user_prompt = f"Aqui estão os dados financeiros do usuário: {resumo}. Analise o balanço e forneça 3 dicas práticas de onde melhorar."
+                            
                             response = client.chat.completions.create(
                                 model="gpt-4o-mini",
                                 messages=[
-                                    {"role": "system", "content": "Atue como um consultor financeiro especialista na regra 50/30/20. Responda obrigatoriamente em Português do Brasil (PT-BR)."},
-                                    {"role": "user", "content": f"Aqui estão os dados financeiros do usuário: {resumo}. Analise o balanço e forneça 3 dicas práticas de onde melhorar."}
+                                    {"role": "system", "content": system_prompt},
+                                    {"role": "user", "content": user_prompt}
                                 ]
-                            ]
+                            )
                             
                             resposta_texto = response.choices[0].message.content
                             st.success("✅ Análise gerada com sucesso pelo ChatGPT!")
