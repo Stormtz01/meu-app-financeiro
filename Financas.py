@@ -123,7 +123,7 @@ def tela_principal():
 
     with aba_lancamento:
         st.header("➕ Adicionar Nova Transação")
-        st.write("Insira os dados da movimentação diretamente no sistema, sem precisar de planilhas.")
+        st.write("Insira os dados da movimentação diretamente no sistema.")
         
         with st.form("form_nova_transacao", clear_on_submit=True):
             col1, col2, col3 = st.columns(3)
@@ -146,7 +146,6 @@ def tela_principal():
                     data_str = data_t.strftime('%d/%m/%Y')
                     mes_ano_str = data_t.strftime('%m/%Y')
                     
-                    # Cálculo automático das alocações padrão 50/30/20 se for saída
                     val_calc = -valor_t if tipo_t == 'Saída' else valor_t
                     c_despesa = val_calc * 0.50 if tipo_t == 'Saída' else None
                     c_guardar = val_calc * 0.30 if tipo_t == 'Saída' else None
@@ -254,26 +253,93 @@ def tela_principal():
             st.warning("Configure a chave da Groq nos secrets.")
 
 # ==========================================
-# 3. AUTENTICAÇÃO
+# 3. AUTENTICAÇÃO COM ABAS RESTAURADAS
 # ==========================================
 if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
 
 if not st.session_state['autenticado']:
     st.markdown("<h1 style='text-align: center;'>🔒 Acesso ao Sistema</h1>", unsafe_allow_html=True)
+    st.write("---")
+    
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        with st.form("form_login"):
-            usuario_login = st.text_input("Usuário")
-            senha_login = st.text_input("Senha", type="password")
-            if st.form_submit_button("Entrar", use_container_width=True):
-                with engine.connect() as conn:
-                    user = conn.execute(text("SELECT * FROM usuarios WHERE usuario = :u AND senha = :s"), {"u": usuario_login, "s": senha_login}).fetchone()
-                if user:
-                    st.session_state['autenticado'] = True
-                    st.session_state['usuario'] = usuario_login
-                    st.rerun()
-                else:
-                    st.error("Credenciais inválidas.")
+        aba_login, aba_cadastro, aba_senha = st.tabs(["Entrar", "Criar Nova Conta", "Alterar Senha"])
+        
+        with aba_login:
+            st.write("Insira suas credenciais para acessar o painel.")
+            with st.form("form_login"):
+                usuario_login = st.text_input("Usuário")
+                senha_login = st.text_input("Senha", type="password")
+                submit_login = st.form_submit_button("Entrar", use_container_width=True)
+                
+                if submit_login:
+                    if usuario_login and senha_login:
+                        with engine.connect() as conn:
+                            usuario_encontrado = conn.execute(
+                                text("SELECT * FROM usuarios WHERE usuario = :u AND senha = :s"), 
+                                {"u": usuario_login, "s": senha_login}
+                            ).fetchone()
+                        
+                        if usuario_encontrado:
+                            st.session_state['autenticado'] = True
+                            st.session_state['usuario'] = usuario_login
+                            st.rerun()
+                        else:
+                            st.error("⚠️ Usuário ou senha incorretos.")
+                    else:
+                        st.warning("Preencha todos os campos.")
+                    
+        with aba_cadastro:
+            st.write("Cadastre um novo usuário para acessar o sistema.")
+            with st.form("form_cadastro"):
+                novo_usuario = st.text_input("Novo Usuário")
+                nova_senha = st.text_input("Nova Senha", type="password")
+                confirma_senha = st.text_input("Confirme a Senha", type="password")
+                submit_cadastro = st.form_submit_button("Cadastrar", use_container_width=True)
+                
+                if submit_cadastro:
+                    if novo_usuario and nova_senha and confirma_senha:
+                        if nova_senha == confirma_senha:
+                            try:
+                                with engine.begin() as conn:
+                                    conn.execute(
+                                        text("INSERT INTO usuarios (usuario, senha) VALUES (:u, :s)"), 
+                                        {"u": novo_usuario, "s": nova_senha}
+                                    )
+                                st.success(f"✅ Conta criada! O usuário '{novo_usuario}' já pode fazer login na aba 'Entrar'.")
+                            except IntegrityError:
+                                st.error("⚠️ Este usuário já está cadastrado! Escolha outro nome ou vá para a aba 'Entrar'.")
+                        else:
+                            st.error("⚠️ As senhas não coincidem.")
+                    else:
+                        st.warning("Preencha todos os campos.")
+
+        with aba_senha:
+            st.write("Atualize a sua senha de acesso.")
+            with st.form("form_senha"):
+                alt_usuario = st.text_input("Usuário")
+                alt_senha_atual = st.text_input("Senha Atual", type="password")
+                alt_nova_senha = st.text_input("Nova Senha", type="password")
+                submit_senha = st.form_submit_button("Atualizar Senha", use_container_width=True)
+                
+                if submit_senha:
+                    if alt_usuario and alt_senha_atual and alt_nova_senha:
+                        with engine.connect() as conn:
+                            res = conn.execute(
+                                text("SELECT * FROM usuarios WHERE usuario = :u AND senha = :s"), 
+                                {"u": alt_usuario, "s": alt_senha_atual}
+                            ).fetchone()
+                            
+                            if res:
+                                conn.execute(
+                                    text("UPDATE usuarios SET senha = :ns WHERE usuario = :u"), 
+                                    {"ns": alt_nova_senha, "u": alt_usuario}
+                                )
+                                st.success("✅ Senha alterada com sucesso! Você já pode fazer login.")
+                            else:
+                                st.error("⚠️ Usuário ou senha atual incorretos.")
+                    else:
+                        st.warning("Preencha todos os campos.")
 else:
     tela_principal()
