@@ -16,36 +16,47 @@ DATABASE_URL = st.secrets["DATABASE_URL"]
 st.set_page_config(page_title="Controle Financeiro Inteligente", layout="wide", page_icon="💸")
 
 # ==========================================
-# 1. BANCO DE DADOS E CARGA AUTOMÁTICA
+# 1. BANCO DE DADOS E CARGA AUTOMÁTICA SEGURA
 # ==========================================
 engine = create_engine(DATABASE_URL)
 
 def inicializar_banco():
     with engine.begin() as conn:
+        # Cria a tabela base se não existir
         conn.execute(text('''
             CREATE TABLE IF NOT EXISTS historico (
-                id SERIAL PRIMARY KEY,
-                transacao_id INT,
-                data TEXT,
-                competencia TEXT,
-                mes_ano TEXT,
-                tipo TEXT,
-                categoria TEXT,
-                natureza TEXT,
-                descricao TEXT,
-                via_pgto TEXT,
-                pagador_recebedor TEXT,
-                titular TEXT,
-                parcela TEXT,
-                valor REAL,
-                status TEXT,
-                c_despesa REAL,
-                c_guardar REAL,
-                c_gastar_b REAL,
-                c_gastar_c REAL,
-                usuario TEXT
+                id SERIAL PRIMARY KEY
             )
         '''))
+        
+        # Garante que todas as colunas necessárias existam na tabela
+        colunas = [
+            ("transacao_id", "INT"),
+            ("data", "TEXT"),
+            ("competencia", "TEXT"),
+            ("mes_ano", "TEXT"),
+            ("tipo", "TEXT"),
+            ("categoria", "TEXT"),
+            ("natureza", "TEXT"),
+            ("descricao", "TEXT"),
+            ("via_pgto", "TEXT"),
+            ("pagador_recebedor", "TEXT"),
+            ("titular", "TEXT"),
+            ("parcela", "TEXT"),
+            ("valor", "REAL"),
+            ("status", "TEXT"),
+            ("c_despesa", "REAL"),
+            ("c_guardar", "REAL"),
+            ("c_gastar_b", "REAL"),
+            ("c_gastar_c", "REAL"),
+            ("usuario", "TEXT")
+        ]
+        
+        for col, tipo_col in colunas:
+            try:
+                conn.execute(text(f"ALTER TABLE historico ADD COLUMN IF NOT EXISTS {col} {tipo_col}"))
+            except Exception:
+                pass
         
         conn.execute(text('''
             CREATE TABLE IF NOT EXISTS usuarios (
